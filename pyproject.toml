@@ -9,6 +9,7 @@ dependencies = [
     "moshi>=0.2.13",
     "gradio>=5.50.0",
     "jupyter>=1.1.1",
+    "torch",
 ]
 
 [tool.setuptools.dynamic]
@@ -44,6 +45,14 @@ hibiki-zero = "hibiki_zero.run:cli_app"
 # System python distribution can have header files missing, so we use only the python
 # distributions provided by uv which have everything included.
 python-preference = "only-managed"
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu130", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
