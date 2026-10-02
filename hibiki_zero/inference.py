@@ -61,6 +61,7 @@ class ServerState:
         self.mimi.streaming_forever(1)
         self.lm_gen.streaming_forever(1)
 
+    # This function is called from run.py
     def warmup(self):
         for chunk in range(4):
             chunk = torch.zeros(1, 1, self.frame_size, dtype=torch.float32, device=self.device)
@@ -73,6 +74,8 @@ class ServerState:
 
         torch.cuda.synchronize()
 
+
+    # This function is called from recv_loop()
     async def decode_and_send(
         self, tokens: torch.Tensor, ws: web.WebSocketResponse, opus_writer: sphn.OpusStreamWriter
     ):
@@ -92,6 +95,9 @@ class ServerState:
         elif text_token == 2:
             log("info", "End Of Sequence token")
 
+
+    # This function calls decode_and_send()
+    # This function is called from handle_chat()
     async def recv_loop(
         self,
         ws: web.WebSocketResponse,
@@ -157,6 +163,9 @@ class ServerState:
         finally:
             log("info", "Connection closed.")
 
+
+    # This function calls recv_loop()
+    # This function is called from run.py
     async def handle_chat(self, request):
         ws = web.WebSocketResponse()
         await ws.prepare(request)

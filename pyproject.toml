@@ -10,6 +10,7 @@ dependencies = [
     "gradio>=5.50.0",
     "jupyter>=1.1.1",
     "torch",
+    "ipykernel>=7.2.0",
 ]
 
 [tool.setuptools.dynamic]
@@ -17,6 +18,11 @@ version = {attr = "hibiki_zero.__version__"}
 
 [tool.ruff]
 line-length = 100
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
 
 [tool.ruff.format]
 line-ending = "lf"
@@ -48,11 +54,6 @@ python-preference = "only-managed"
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu130", marker = "sys_platform == 'linux'" }]
-
-[[tool.uv.index]]
-name = "pytorch-cu130"
-url = "https://download.pytorch.org/whl/cu130"
-explicit = true
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"

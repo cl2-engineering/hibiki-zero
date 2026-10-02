@@ -12,7 +12,7 @@ from typing import Optional
 import torch
 import typer
 from aiohttp import web
-from moshi.models import LMGen, loaders
+from moshi.models import LMGen, loaders # luc: from __init__; don't worry about the red line ???
 from typing_extensions import Annotated
 
 from hibiki_zero.client_utils import audio_read, log, save_results, stack_and_pad_audio
