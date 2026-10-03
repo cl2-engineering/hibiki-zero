@@ -279,8 +279,9 @@ def decode_outputs(
             eos_idx: int = len(text_tokens) - 1
             while eos_idx > 0 and text_tokens[eos_idx] == text_tokenizer.pad_id():
                 eos_idx -= 1
+            eos_idx += 1  # keep the last generated word
         text_tokens = [t for t in text_tokens[:eos_idx] if t > text_tokenizer.pad_id()]
-        text: str = text_tokenizer.decode(text_tokens)
+        text: str = text_tokenizer.decode(text_tokens)  # type: ignore
         wav = wav[:, : int(eos_idx * mimi.sample_rate / mimi.frame_rate)]
         outputs.append((wav, text))
 
