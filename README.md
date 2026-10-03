@@ -18,7 +18,7 @@ Hibiki-Zero is a 3B-parameter model and requires an NVIDIA GPU to run: 8 GB VRAM
 
 Hibiki-Zero comes with a server you can run to interact with Hibiki in real time. To run it, just use:
 
-```python
+```bash
 uvx -p 3.13 hibiki-zero serve [--gradio-tunnel]
 ```
 
@@ -31,7 +31,7 @@ If you don't have `uv`, you must first install hibiki-zero with `pip install hib
 
 If you'd like to run Hibiki-Zero on existing audio files, run:
 
-```python
+```bash
 uvx -p 3.13 hibiki-zero generate [--file /path/to/my/audio.wav --file /path/to/another/audio.mp3]
 ```
 
@@ -39,12 +39,20 @@ Batch inference is supported, meaning you can run the model on multiple audio fi
 
 ## Local development
 
-We recomment using `uv`, run anything with `uv run` in this repository. For example
+We recommend using `uv`, run anything with `uv run` in this repository. For example
 
 ```bash
 uv run some_file.py
-or 
+```
+
+The server needs the frontend to be built first (this requires [`pnpm`](https://pnpm.io/installation)):
+
+```bash
+bash build_frontend.sh
 uv run hibiki-zero serve
 ```
-if you use pip, use `pip install -e .` before executing python commands.
+
+If you use pip, use `pip install -e .` before executing python commands.
+
+Hibiki-Zero runs in bfloat16 by default. On GPUs without bfloat16 support it falls back to float16, which you can also select with `--no-bf16`.
 
