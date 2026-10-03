@@ -7,14 +7,13 @@ import os
 import secrets
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Annotated, Optional
 
 import torch
 import typer
 from aiohttp import web
 from moshi.models.loaders import CheckpointInfo
 from moshi.models.lm import LMGen
-from typing_extensions import Annotated
 
 from hibiki_zero.client_utils import audio_read, log, save_results, stack_and_pad_audio
 from hibiki_zero.inference import ServerState, decode_outputs, encode_inputs, get_lmgen, seed_all
@@ -30,6 +29,15 @@ DEFAULT_AUDIO_SAMPLES: list[Path] = sorted(
 DEFAULT_STATIC_DIR = MODULE_DIR / "static"
 
 cli_app = typer.Typer()
+
+
+def get_dtype(bf16: bool, device: str) -> torch.dtype:
+    if not bf16:
+        return torch.float16
+    if torch.device(device).type == "cuda" and not torch.cuda.is_bf16_supported():
+        log("warning", "This GPU doesn't support bfloat16, falling back to float16.")
+        return torch.float16
+    return torch.bfloat16
 
 
 @cli_app.command()
@@ -57,7 +65,9 @@ def serve(
     fuse_lora: Annotated[
         bool, typer.Option("--fuse-lora/--no-fuse-lora", help="Fuse LoRA layers.")
     ] = True,
-    bf16: Annotated[bool, typer.Option(help="Use bfloat16.")] = False,
+    bf16: Annotated[
+        bool, typer.Option(help="Use bfloat16, or float16 with --no-bf16 (for older GPUs).")
+    ] = True,
     device: Annotated[str, typer.Option(help="Device to run on.")] = "cuda",
     ssl: Annotated[
         Optional[str], typer.Option(help="Directory containing cert.pem and key.pem.")
@@ -73,7 +83,7 @@ def serve(
         return
 
     seed_all(seed)
-    dtype = torch.bfloat16 if bf16 else torch.float16
+    dtype = get_dtype(bf16, device)
 
     if not static.exists():
         log(
@@ -160,7 +170,9 @@ def serve(
         tunnel_kwargs = {}
         if "share_server_tls_certificate" in inspect.signature(setup_tunnel).parameters:
             tunnel_kwargs["share_server_tls_certificate"] = None
-        tunnel = setup_tunnel("localhost", port, tunnel_token, None, **tunnel_kwargs)  # type: ignore
+        # A wildcard address isn't something the tunnel can connect to.
+        tunnel_host = "localhost" if host in ("0.0.0.0", "::", "") else host
+        tunnel = setup_tunnel(tunnel_host, port, tunnel_token, None, **tunnel_kwargs)  # type: ignore
         log("info", "Tunnel started at {0}", [(tunnel, "green")])
         log("info", "Note: tunnel goes through the US; expect higher latency in Europe.")
 
@@ -170,7 +182,9 @@ def serve(
 @cli_app.command()
 @torch.no_grad()
 def generate(
-    files: Annotated[list[Path], typer.Option("--file", help="Input files to translate.")] = None,
+    files: Annotated[
+        Optional[list[Path]], typer.Option("--file", help="Input files to translate.")
+    ] = None,
     gen_duration: Annotated[
         float,
         typer.Option(
@@ -181,7 +195,8 @@ def generate(
         "./translations"
     ),
     tag: Annotated[
-        str, typer.Option(help="Tag to add to translation outputs filenames to identify them.")
+        Optional[str],
+        typer.Option(help="Tag to add to translation outputs filenames to identify them."),
     ] = None,
     repeats: Annotated[int, typer.Option(help="Do repeats generation for each input file.")] = 1,
     hf_repo: Annotated[
@@ -199,7 +214,9 @@ def generate(
     fuse_lora: Annotated[
         bool, typer.Option("--fuse-lora/--no-fuse-lora", help="Fuse LoRA layers.")
     ] = True,
-    bf16: Annotated[bool, typer.Option(help="Use bfloat16.")] = False,
+    bf16: Annotated[
+        bool, typer.Option(help="Use bfloat16, or float16 with --no-bf16 (for older GPUs).")
+    ] = True,
     device: Annotated[str, typer.Option(help="Device to run on.")] = "cuda",
     seed: Annotated[int, typer.Option(help="Random seed.")] = 42,
 ):
@@ -211,7 +228,7 @@ def generate(
         return
 
     seed_all(seed)
-    dtype = torch.bfloat16 if bf16 else torch.float16
+    dtype = get_dtype(bf16, device)
 
     log("info", "Starting Hibiki-Zero inference.")
     files = files if files is not None else DEFAULT_AUDIO_SAMPLES

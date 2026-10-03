@@ -6,6 +6,7 @@ import asyncio
 import math
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import aiohttp
@@ -29,7 +30,7 @@ def seed_all(seed):
         torch.cuda.manual_seed_all(seed)  # for multi-GPU setups
     random.seed(seed)
     np.random.seed(seed)
-    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
 
@@ -59,11 +60,18 @@ class ServerState:
         self.device = device
         self.frame_size = int(self.mimi.sample_rate / self.mimi.frame_rate)
         self.lock = asyncio.Lock()
+        # All model calls run on this single thread, so they don't block the event loop
+        # and the CUDA graphs captured during warmup are always replayed from one thread.
+        self.model_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hibiki-model")
 
         self.mimi.streaming_forever(1)
         self.lm_gen.streaming_forever(1)
 
     def warmup(self):
+        self.model_executor.submit(self._warmup).result()
+
+    @torch.no_grad()
+    def _warmup(self):
         for _ in range(4):
             chunk = torch.zeros(1, 1, self.frame_size, dtype=torch.float32, device=self.device)
             codes = self.mimi.encode(chunk)
@@ -76,19 +84,49 @@ class ServerState:
         if torch.device(self.device).type == "cuda":
             torch.cuda.synchronize()
 
-    async def decode_and_send(
-        self, tokens: torch.Tensor, ws: web.WebSocketResponse, opus_writer: sphn.OpusStreamWriter
+    async def run_on_model_thread(self, func, *args):
+        return await asyncio.get_running_loop().run_in_executor(self.model_executor, func, *args)
+
+    def _reset_streaming(self):
+        self.mimi.reset_streaming()
+        self.lm_gen.reset_streaming()
+
+    @torch.no_grad()
+    def _process_chunk(
+        self, chunk: np.ndarray, reset_encoder: bool
+    ) -> list[tuple[np.ndarray, int]]:
+        """Run one audio frame through the model, returning (output pcm, text token) pairs."""
+        codes = self.mimi.encode(torch.from_numpy(chunk).to(device=self.device)[None, None])
+        if reset_encoder:
+            # The first input audio frame is ignored, as from the point of
+            # view of the model it is in the past. We still `mimi.encode` for simplicity,
+            # however as the first encoded frame has a specific structure (due to the left padding),
+            # we reset the streaming state of the encoder to reapply the padding on the next call.
+            self.mimi.reset_streaming()
+        outputs = []
+        for c in range(codes.shape[-1]):
+            tokens = self.lm_gen.step(codes[:, :, c : c + 1])
+            if tokens is None:
+                continue
+            assert tokens.shape[1] == self.lm_gen.lm_model.dep_q + 1
+            main_pcm = self.mimi.decode(tokens[:, 1:]).cpu()
+            outputs.append((main_pcm[0, 0].numpy(), tokens[0, 0, 0].item()))
+        return outputs
+
+    async def send_outputs(
+        self,
+        pcm: np.ndarray,
+        text_token: int,
+        ws: web.WebSocketResponse,
+        opus_writer: sphn.OpusStreamWriter,
     ):
-        assert tokens.shape[1] == self.lm_gen.lm_model.dep_q + 1
-        main_pcm = self.mimi.decode(tokens[:, 1:])
-        main_pcm = main_pcm.cpu()
-        opus_bytes = opus_writer.append_pcm(main_pcm[0, 0].numpy())
+        opus_bytes = opus_writer.append_pcm(pcm)
         if len(opus_bytes) > 0:
             await ws.send_bytes(b"\x01" + opus_bytes)
-        text_token = tokens[0, 0, 0].item()
-        if text_token == 2:
+        lm_model = self.lm_gen.lm_model
+        if text_token == self.text_tokenizer.eos_id():
             log("info", "End Of Sequence token")
-        elif text_token not in (0, 3):
+        elif text_token not in (lm_model.end_of_text_padding_id, lm_model.text_padding_token_id):
             _text = self.text_tokenizer.id_to_piece(text_token)  # type: ignore
             _text = _text.replace("▁", " ")
             msg = b"\x02" + bytes(_text, encoding="utf8")
@@ -135,21 +173,13 @@ class ServerState:
                         be = time.time()
                         chunk = all_pcm_data[: self.frame_size]
                         all_pcm_data = all_pcm_data[self.frame_size :]
-                        chunk = torch.from_numpy(chunk)
-                        chunk = chunk.to(device=self.device)[None, None]
-                        codes = self.mimi.encode(chunk)
+                        outputs = await self.run_on_model_thread(
+                            self._process_chunk, chunk, skip_frames > 0
+                        )
                         if skip_frames:
-                            # The first input audio frame is ignored, as from the point of
-                            # view of the model it is in the past. We still `mimi.encode` for simplicity,
-                            # however as the first encoded frame has a specific structure (due to the left padding),
-                            # we reset the streaming state of the encoder to reapply the padding on the next call.
-                            self.mimi.reset_streaming()
                             skip_frames -= 1
-                        for c in range(codes.shape[-1]):
-                            tokens = self.lm_gen.step(codes[:, :, c : c + 1])
-                            if tokens is None:
-                                continue
-                            await self.decode_and_send(tokens, ws, opus_writer)
+                        for pcm, text_token in outputs:
+                            await self.send_outputs(pcm, text_token, ws, opus_writer)
                         log(
                             "info",
                             f"frame {frame_idx} handled in {1000 * (time.time() - be):.1f}ms",
@@ -169,8 +199,7 @@ class ServerState:
         async with self.lock:
             opus_writer = sphn.OpusStreamWriter(self.mimi.sample_rate)
             opus_reader = sphn.OpusStreamReader(self.mimi.sample_rate)
-            self.mimi.reset_streaming()
-            self.lm_gen.reset_streaming()
+            await self.run_on_model_thread(self._reset_streaming)
             # Send the handshake.
             await ws.send_bytes(b"\x00")
             await self.recv_loop(ws, opus_reader, opus_writer)

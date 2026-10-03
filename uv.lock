@@ -899,22 +899,40 @@ name = "hibiki-zero"
 version = "0.0.4"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "gradio" },
-    { name = "ipykernel" },
-    { name = "jupyter" },
     { name = "moshi" },
+    { name = "numpy" },
+    { name = "sentencepiece" },
+    { name = "sphn" },
     { name = "torch", version = "2.9.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
     { name = "torch", version = "2.9.1+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "sys_platform == 'linux'" },
+    { name = "typer" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "ipykernel" },
+    { name = "jupyter" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.11.18" },
     { name = "gradio", specifier = ">=5.50.0" },
-    { name = "ipykernel", specifier = ">=7.2.0" },
-    { name = "jupyter", specifier = ">=1.1.1" },
     { name = "moshi", specifier = ">=0.2.13" },
+    { name = "numpy", specifier = ">=2.2.6" },
+    { name = "sentencepiece", specifier = ">=0.2.1" },
+    { name = "sphn", specifier = ">=0.2.1" },
     { name = "torch", marker = "sys_platform != 'linux'" },
     { name = "torch", marker = "sys_platform == 'linux'", index = "https://download.pytorch.org/whl/cu130" },
+    { name = "typer", specifier = ">=0.21.1" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "ipykernel", specifier = ">=7.2.0" },
+    { name = "jupyter", specifier = ">=1.1.1" },
 ]
 
 [[package]]
