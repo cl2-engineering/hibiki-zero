@@ -22,12 +22,12 @@ def get_color_code(color_name: str) -> tuple:
     return COLOR_MAP.get(color_name, (255, 255, 255))  # default to white if unknown
 
 
-def colorize_rgb(text: str, rgb: tuple) -> str:
+def colorize_rgb(text: object, rgb: tuple) -> str:
     return f"\033[38;2;{rgb[0]};{rgb[1]};{rgb[2]}m{text}\033[0m"
 
 
 def make_colored_log(
-    level: str, msg: str, colored_parts: list[tuple[str, str]] | None = None
+    level: str, msg: str, colored_parts: list[tuple[object, str]] | None = None
 ) -> str:
     if level == "info":
         prefix = colorize_rgb("[Info]", get_color_code("blue"))
@@ -45,7 +45,10 @@ def make_colored_log(
 
 
 def log(
-    level: str, msg: str, colored_parts: list[tuple[str, str]] | None = None, end: str | None = "\n"
+    level: str,
+    msg: str,
+    colored_parts: list[tuple[object, str]] | None = None,
+    end: str | None = "\n",
 ) -> None:
     """Log something with a given level."""
     print(make_colored_log(level, msg, colored_parts), end=end)
