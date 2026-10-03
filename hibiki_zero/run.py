@@ -21,9 +21,12 @@ from hibiki_zero.inference import ServerState, decode_outputs, encode_inputs, ge
 
 MODULE_DIR: Path = Path(__file__).parent
 DEFAULT_REPO: str = "kyutai/hibiki-zero-3b-pytorch-bf16@23b3e0b41782026c81dd5283a034107b01f9e513"
-DEFAULT_AUDIO_SAMPLES: list[Path] = [
-    MODULE_DIR / "samples" / fname for fname in os.listdir(MODULE_DIR / "samples")
-]
+AUDIO_EXTENSIONS: set[str] = {".wav", ".mp3", ".flac", ".ogg", ".m4a"}
+DEFAULT_AUDIO_SAMPLES: list[Path] = sorted(
+    fpath
+    for fpath in (MODULE_DIR / "samples").iterdir()
+    if fpath.suffix.lower() in AUDIO_EXTENSIONS
+)
 DEFAULT_STATIC_DIR = MODULE_DIR / "static"
 
 cli_app = typer.Typer()
@@ -62,7 +65,7 @@ def serve(
     seed: Annotated[int, typer.Option(help="Random seed.")] = 42,
 ):
     # sanity checks
-    if not torch.cuda.is_available():
+    if torch.device(device).type == "cuda" and not torch.cuda.is_available():
         log(
             "error",
             "Found no NVIDIA driver on your system. The server needs to be launched from a machine that has access to a GPU.",
@@ -200,7 +203,7 @@ def generate(
     device: Annotated[str, typer.Option(help="Device to run on.")] = "cuda",
     seed: Annotated[int, typer.Option(help="Random seed.")] = 42,
 ):
-    if not torch.cuda.is_available():
+    if torch.device(device).type == "cuda" and not torch.cuda.is_available():
         log(
             "error",
             "Found no NVIDIA driver on your system. Generation needs to be done on a machine that has access to a GPU.",
@@ -281,9 +284,7 @@ def generate(
         # generation
         for step in range(codes.shape[-1]):
             tokens = lm_gen.step(codes[:, :, step : step + 1])
-            if tokens is None:
-                print(None)
-            else:
+            if tokens is not None:
                 output_text_tokens.append(tokens[:, 0, :])
                 output_audio_tokens.append(tokens[:, 1:, :])
             log(
@@ -300,6 +301,10 @@ def generate(
         + f"(throughput = batch size x real-time factor = {throughput:.1f})",
         [(f"{real_time_factor:.1f}x real-time", "orange")],
     )
+
+    if len(output_text_tokens) == 0:
+        log("error", "The model produced no output tokens, nothing to save.")
+        return
 
     log("info", "Saving results...")
     batch_text_tokens: torch.Tensor = torch.concat(output_text_tokens, dim=-1)  # B x T

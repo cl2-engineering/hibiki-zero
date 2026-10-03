@@ -2,11 +2,11 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from collections.abc import Iterable
 from pathlib import Path
 
 import sphn
 import torch
-from IPython.display import Audio, display
 
 COLOR_MAP: dict[str, tuple] = {
     "blue": (92, 158, 255),
@@ -61,7 +61,7 @@ def audio_read(
         sr = to_sample_rate
     wav_tensor: torch.Tensor = torch.tensor(wav)
     if wav_tensor.ndim == 1:
-        wav_tensor.unsqueeze(0)
+        wav_tensor = wav_tensor.unsqueeze(0)
     elif wav_tensor.ndim == 2:
         if wav_tensor.shape[0] > 2:
             raise ValueError(
@@ -97,11 +97,13 @@ def stack_and_pad_audio(wavs: list[torch.Tensor], max_len: int | None = None) ->
 
 def display_audio(wav: torch.Tensor, sample_rate: int):
     """Display an audio reader to be used in an interactive notebook."""
+    from IPython.display import Audio, display
+
     display(Audio(wav.numpy(), rate=sample_rate))
 
 
 def save_results(
-    inputs: list[str, torch.Tensor],
+    inputs: Iterable[tuple[Path, torch.Tensor]],
     outputs: list[tuple[torch.Tensor, str]],
     sample_rate: int,
     output_dir: Path,
@@ -111,9 +113,9 @@ def save_results(
     for file_idx, ((in_fpath, in_wav), (out_wav, out_text)) in enumerate(zip(inputs, outputs)):
         stereo_audio: torch.Tensor = stack_and_pad_audio([in_wav, out_wav]).squeeze()
         output_stem_fpath: Path = output_dir / f"{file_idx}_{in_fpath.stem}{tag_suffix}"
-        mono_fpath: Path = output_stem_fpath.parent / f"{output_stem_fpath.stem}_mono.wav"
-        stereo_fpath: Path = output_stem_fpath.parent / f"{output_stem_fpath.stem}_stereo.wav"
-        text_fpath: Path = output_stem_fpath.parent / f"{output_stem_fpath.stem}.txt"
+        mono_fpath: Path = output_stem_fpath.parent / f"{output_stem_fpath.name}_mono.wav"
+        stereo_fpath: Path = output_stem_fpath.parent / f"{output_stem_fpath.name}_stereo.wav"
+        text_fpath: Path = output_stem_fpath.parent / f"{output_stem_fpath.name}.txt"
         mono_fpath.parent.mkdir(exist_ok=True, parents=True)
         sphn.write_wav(mono_fpath, out_wav.numpy(), sample_rate)
         sphn.write_wav(stereo_fpath, stereo_audio.numpy(), sample_rate)

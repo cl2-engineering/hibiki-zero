@@ -63,9 +63,8 @@ class ServerState:
         self.mimi.streaming_forever(1)
         self.lm_gen.streaming_forever(1)
 
-    # This function is called from run.py
     def warmup(self):
-        for chunk in range(4):
+        for _ in range(4):
             chunk = torch.zeros(1, 1, self.frame_size, dtype=torch.float32, device=self.device)
             codes = self.mimi.encode(chunk)
             for c in range(codes.shape[-1]):
@@ -74,14 +73,11 @@ class ServerState:
                     continue
                 _ = self.mimi.decode(tokens[:, 1:])
 
-        torch.cuda.synchronize()
+        if torch.device(self.device).type == "cuda":
+            torch.cuda.synchronize()
 
-
-    # This function is called from recv_loop()
-    async def decode_and_send(self, 
-        tokens: torch.Tensor, 
-        ws: web.WebSocketResponse, 
-        opus_writer: sphn.OpusStreamWriter
+    async def decode_and_send(
+        self, tokens: torch.Tensor, ws: web.WebSocketResponse, opus_writer: sphn.OpusStreamWriter
     ):
         assert tokens.shape[1] == self.lm_gen.lm_model.dep_q + 1
         main_pcm = self.mimi.decode(tokens[:, 1:])
@@ -90,18 +86,15 @@ class ServerState:
         if len(opus_bytes) > 0:
             await ws.send_bytes(b"\x01" + opus_bytes)
         text_token = tokens[0, 0, 0].item()
-        if text_token not in (0, 3):
+        if text_token == 2:
+            log("info", "End Of Sequence token")
+        elif text_token not in (0, 3):
             _text = self.text_tokenizer.id_to_piece(text_token)  # type: ignore
             _text = _text.replace("▁", " ")
             msg = b"\x02" + bytes(_text, encoding="utf8")
             log("info", f"text token: '{_text}'")
             await ws.send_bytes(msg)
-        elif text_token == 2:
-            log("info", "End Of Sequence token")
 
-
-    # This function calls decode_and_send()
-    # This function is called from handle_chat()
     async def recv_loop(
         self,
         ws: web.WebSocketResponse,
@@ -167,9 +160,6 @@ class ServerState:
         finally:
             log("info", "Connection closed.")
 
-
-    # This function calls recv_loop()
-    # This function is called from run.py
     async def handle_chat(self, request):
         ws = web.WebSocketResponse()
         await ws.prepare(request)
