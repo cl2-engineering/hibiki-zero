@@ -14,7 +14,9 @@ import sentencepiece
 import sphn
 import torch
 from aiohttp import web
-from moshi.models import LMGen, LMModel, MimiModel, loaders
+from moshi.models.compression import MimiModel
+from moshi.models.loaders import CheckpointInfo
+from moshi.models.lm import LMGen, LMModel
 from moshi.run_inference import get_condition_tensors
 
 from hibiki_zero.client_utils import log
@@ -76,8 +78,10 @@ class ServerState:
 
 
     # This function is called from recv_loop()
-    async def decode_and_send(
-        self, tokens: torch.Tensor, ws: web.WebSocketResponse, opus_writer: sphn.OpusStreamWriter
+    async def decode_and_send(self, 
+        tokens: torch.Tensor, 
+        ws: web.WebSocketResponse, 
+        opus_writer: sphn.OpusStreamWriter
     ):
         assert tokens.shape[1] == self.lm_gen.lm_model.dep_q + 1
         main_pcm = self.mimi.decode(tokens[:, 1:])
@@ -185,7 +189,7 @@ class ServerState:
 
 
 def get_lmgen(
-    lm: LMModel, checkpoint_info: loaders.CheckpointInfo, batch_size: int, cfg_coef: int = 1.0
+    lm: LMModel, checkpoint_info: CheckpointInfo, batch_size: int, cfg_coef: int = 1
 ) -> LMGen:
     condition_tensors = get_condition_tensors(
         checkpoint_info.model_type, lm, batch_size=batch_size, cfg_coef=cfg_coef

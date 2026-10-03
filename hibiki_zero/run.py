@@ -12,7 +12,8 @@ from typing import Optional
 import torch
 import typer
 from aiohttp import web
-from moshi.models import LMGen, loaders # luc: from __init__; don't worry about the red line ???
+from moshi.models.loaders import CheckpointInfo
+from moshi.models.lm import LMGen
 from typing_extensions import Annotated
 
 from hibiki_zero.client_utils import audio_read, log, save_results, stack_and_pad_audio
@@ -102,7 +103,7 @@ def serve(
         revision = None
 
     log("info", "Retrieving the model checkpoint...")
-    checkpoint_info = loaders.CheckpointInfo.from_hf_repo(
+    checkpoint_info = CheckpointInfo.from_hf_repo(
         hf_repo_name,
         model_weight,
         mimi_weight,
@@ -233,7 +234,7 @@ def generate(
         revision = None
 
     log("info", "Retrieving the model checkpoint...")
-    checkpoint_info = loaders.CheckpointInfo.from_hf_repo(
+    checkpoint_info = CheckpointInfo.from_hf_repo(
         hf_repo_name,
         model_weight,
         mimi_weight,
