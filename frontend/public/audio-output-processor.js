@@ -8,10 +8,14 @@ function asSamples(mili) {
   return Math.round((mili * sampleRate) / 1000);
 }
 
-const DEFAULT_MAX_BUFFER_MS = 30 * 1000;
+// Once this much audio is queued on top of the initial buffer, the oldest audio is dropped
+// so playback catches up instead of staying behind for the rest of the session.
+const DEFAULT_MAX_BUFFER_MS = 1000;
+
+const DEBUG = false;
 
 const debug = (...args) => {
-  // console.debug(...args);
+  if (DEBUG) console.debug(...args);
 };
 
 class AudioOutputProcessor extends AudioWorkletProcessor {
@@ -32,8 +36,9 @@ class AudioOutputProcessor extends AudioWorkletProcessor {
     // increments
     this.partialBufferIncrement = asSamples(5);
     this.maxPartialWithIncrements = asSamples(80);
-    this.maxBufferSamplesIncrement = asSamples(5);
-    this.maxMaxBufferWithIncrements = asSamples(80);
+    // Each drop raises the limit a little, so a jittery connection drops less often.
+    this.maxBufferSamplesIncrement = asSamples(250);
+    this.maxMaxBufferWithIncrements = asSamples(3000);
 
     // State and metrics
     this.initState();
@@ -196,11 +201,7 @@ class AudioOutputProcessor extends AudioWorkletProcessor {
         this.offsetInFirstBuffer + to_copy,
       );
       output.set(subArray, out_idx);
-      anyAudio =
-        anyAudio ||
-        output.some(function (x) {
-          x > 1e-4 || x < -1e-4;
-        });
+      anyAudio = anyAudio || subArray.some((x) => x > 1e-4 || x < -1e-4);
       this.offsetInFirstBuffer += to_copy;
       out_idx += to_copy;
       if (this.offsetInFirstBuffer == first.length) {
@@ -214,16 +215,18 @@ class AudioOutputProcessor extends AudioWorkletProcessor {
         output[i] *= i / out_idx;
       }
     }
-    if (out_idx < output.length && !anyAudio) {
-      // At the end of a turn, we will get some padding of 0, so we only
-      // incease the buffer if we got some audio, e.g. we truly lagged in the middle of something.
+    if (out_idx < output.length) {
       debug(this.timestamp(), "Missed some audio", output.length - out_idx);
-      this.partialBufferSamples += this.partialBufferIncrement;
-      this.partialBufferSamples = Math.min(
-        this.partialBufferSamples,
-        this.maxPartialWithIncrements,
-      );
-      debug("Increased partial buffer to", asMs(this.partialBufferSamples));
+      // At the end of a turn, we will get some padding of 0, so we only
+      // increase the buffer if we got some audio, e.g. we truly lagged in the middle of something.
+      if (anyAudio) {
+        this.partialBufferSamples += this.partialBufferIncrement;
+        this.partialBufferSamples = Math.min(
+          this.partialBufferSamples,
+          this.maxPartialWithIncrements,
+        );
+        debug("Increased partial buffer to", asMs(this.partialBufferSamples));
+      }
       // We ran out of a buffer, let's revert to the started state to replenish it.
       this.resetStart();
       for (let i = 0; i < out_idx; i++) {

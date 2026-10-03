@@ -25,5 +25,4 @@ declare module "opus-recorder" {
   }
 }
 
-
-type DecoderWorker = Worker
+type DecoderWorker = Worker;

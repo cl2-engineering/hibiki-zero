@@ -14,6 +14,7 @@ const getAudioWorkletNode = async (
 };
 
 export interface AudioProcessor {
+  mediaStream: MediaStream;
   audioContext: AudioContext;
   opusRecorder: OpusRecorder;
   decoder: DecoderWorker;
@@ -36,14 +37,15 @@ export const useAudioProcessor = (
   onOpusRecorded: (chunk: Uint8Array) => void,
 ) => {
   const audioProcessorRef = useRef<AudioProcessor | null>(null);
+  // Set while setupAudio is running, so concurrent calls share a single setup.
+  const setupPromiseRef = useRef<Promise<AudioProcessor> | null>(null);
   const [processingDelaySec, setProcessingDelaySec] = useState(0);
   const recordedChunksRef = useRef<Blob[]>([]);
+  const recordingMimeTypeRef = useRef("audio/webm");
   const [hasRecording, setHasRecording] = useState(false);
 
-  const setupAudio = useCallback(
+  const doSetupAudio = useCallback(
     async (mediaStream: MediaStream) => {
-      if (audioProcessorRef.current) return audioProcessorRef.current;
-
       const audioContext = new AudioContext();
       const outputWorklet = await getAudioWorkletNode(
         audioContext,
@@ -146,6 +148,7 @@ export const useAudioProcessor = (
       recordedChunksRef.current = [];
       setHasRecording(false);
       const mediaRecorder = new MediaRecorder(mediaStreamDestination.stream);
+      recordingMimeTypeRef.current = mediaRecorder.mimeType || "audio/webm";
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) recordedChunksRef.current.push(e.data);
       };
@@ -154,6 +157,7 @@ export const useAudioProcessor = (
       };
 
       audioProcessorRef.current = {
+        mediaStream,
         audioContext,
         opusRecorder,
         decoder,
@@ -173,10 +177,29 @@ export const useAudioProcessor = (
     [onOpusRecorded],
   );
 
+  const setupAudio = useCallback(
+    async (mediaStream: MediaStream) => {
+      if (audioProcessorRef.current) return audioProcessorRef.current;
+      if (!setupPromiseRef.current) {
+        setupPromiseRef.current = doSetupAudio(mediaStream).finally(() => {
+          setupPromiseRef.current = null;
+        });
+      }
+      return setupPromiseRef.current;
+    },
+    [doSetupAudio],
+  );
+
   const shutdownAudio = useCallback(() => {
     if (audioProcessorRef.current) {
-      const { audioContext, opusRecorder, outputWorklet, mediaRecorder } =
-        audioProcessorRef.current;
+      const {
+        mediaStream,
+        audioContext,
+        opusRecorder,
+        decoder,
+        outputWorklet,
+        mediaRecorder,
+      } = audioProcessorRef.current;
 
       // Stop the stereo recorder first
       if (mediaRecorder.state !== "inactive") {
@@ -187,17 +210,22 @@ export const useAudioProcessor = (
       outputWorklet.disconnect();
       audioContext.close();
       opusRecorder.stop();
+      decoder.terminate();
+      // Release the microphone so the browser stops showing it as in use
+      mediaStream.getTracks().forEach((track) => track.stop());
 
       // Clear the reference
       audioProcessorRef.current = null;
     }
   }, []);
 
-  const getRecordingBlob = useCallback(() => {
-    const mimeType =
-      audioProcessorRef.current?.mediaRecorder.mimeType || "audio/webm";
-    return new Blob(recordedChunksRef.current, { type: mimeType });
-  }, []);
+  const getRecordingBlob = useCallback(
+    () =>
+      new Blob(recordedChunksRef.current, {
+        type: recordingMimeTypeRef.current,
+      }),
+    [],
+  );
 
   return {
     setupAudio,

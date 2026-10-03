@@ -2,8 +2,8 @@
 @import "tailwindcss";
 
 :root {
-  --green: #39F2AE;
-  --offwhite: #EFEFEF;
+  --green: #39f2ae;
+  --offwhite: #efefef;
   --textgray: #b5bcc5;
   --lightgray: #9d9d9d;
   --gray: #343434;
@@ -14,8 +14,7 @@
   --red: #f55142;
 
   font-family:
-    'Satoshi-Variable',
-    system-ui, Avenir, Helvetica, Arial, sans-serif;
+    "Satoshi-Variable", system-ui, Avenir, Helvetica, Arial, sans-serif;
   font-weight: 500;
   line-height: 1.5;
   font-size: 1.35rem;

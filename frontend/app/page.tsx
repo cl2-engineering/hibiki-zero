@@ -6,12 +6,16 @@ import useWebSocket, { ReadyState } from "react-use-websocket";
 import { useAudioProcessor } from "./useAudioProcessor";
 import { Circle, Download } from "lucide-react";
 import { clsx } from "clsx";
-import WaveformVisualizer, {
-  WaveformVisualizerRef,
-} from "../components/WaveformVisualizer";
+import WaveformVisualizer from "../components/WaveformVisualizer";
 
 export default function Home() {
   const [shouldConnect, setShouldConnect] = useState(false);
+  // Mirrors shouldConnect so WebSocket callbacks can tell a server-side close
+  // from one we asked for.
+  const shouldConnectRef = useRef(false);
+  const startingRef = useRef(false);
+  // The server sends a handshake once it has a free slot for this connection.
+  const [handshakeReceived, setHandshakeReceived] = useState(false);
   const { microphoneAccess, askMicrophoneAccess } = useMicrophoneAccess();
   const [firstTime, setFirstTime] = useState(true);
 
@@ -21,48 +25,33 @@ export default function Home() {
   const [errors, setErrors] = useState<string[]>([]);
   const [stepsSinceLastWord, setStepsSinceLastWord] = useState(0);
 
-  const userVisualizerRef = useRef<WaveformVisualizerRef>(null);
-  const hibikiVisualizerRef = useRef<WaveformVisualizerRef>(null);
+  // Messages are handled one at a time so the async Blob reads keep their order.
+  const messageQueueRef = useRef<Promise<void>>(Promise.resolve());
+  // useWebSocket needs the audio hook's callbacks and the audio hook needs
+  // sendMessage, so the mic callback reaches sendMessage through this ref.
+  const sendMessageRef = useRef<(message: Uint8Array) => void>(() => {});
+  const handshakeReceivedRef = useRef(false);
 
   const wsProtocol =
     typeof window !== "undefined" && window.location.protocol === "https:"
       ? "wss:"
       : "ws:";
-  const webSocketUrl = `${wsProtocol}//${typeof window !== "undefined" ? window.location.host : "localhost"}/api/chat`;
+  // In development the Next.js server doesn't serve /api/chat, so
+  // NEXT_PUBLIC_SERVER_HOST can point the page at the Python server instead.
+  const serverHost =
+    process.env.NEXT_PUBLIC_SERVER_HOST ||
+    (typeof window !== "undefined" ? window.location.host : "localhost");
+  const webSocketUrl = `${wsProtocol}//${serverHost}/api/chat`;
 
-  const { sendMessage, readyState, lastMessage } = useWebSocket(
-    webSocketUrl,
-    {
-      onError: (event) => {
-        console.error("WebSocket error:", event);
-        setErrors((prev) => [
-          ...prev,
-          `Could not connect to the translation server at ${webSocketUrl}`,
-        ]);
-        shutdownAudio();
-        setShouldConnect(false);
-      },
-    },
-    shouldConnect,
-  );
-
-  // const connectionStatus = {
-  //   [ReadyState.CONNECTING]: "Connecting",
-  //   [ReadyState.OPEN]: "Connection open",
-  //   [ReadyState.CLOSING]: "Connection closing",
-  //   [ReadyState.CLOSED]: "Connection closed",
-  //   [ReadyState.UNINSTANTIATED]: "Connection uninstantiated",
-  // }[readyState];
-
-  const onAudioReceivedFromMic = useCallback(
-    (opusAudio: Uint8Array) => {
-      const message = new Uint8Array(opusAudio.length + 1);
-      message[0] = 1;
-      message.set(opusAudio, 1);
-      sendMessage(message);
-    },
-    [sendMessage],
-  );
+  const onAudioReceivedFromMic = useCallback((opusAudio: Uint8Array) => {
+    // Until the handshake, the server isn't reading our audio yet, and anything
+    // sent now would pile up and be translated late.
+    if (!handshakeReceivedRef.current) return;
+    const message = new Uint8Array(opusAudio.length + 1);
+    message[0] = 1;
+    message.set(opusAudio, 1);
+    sendMessageRef.current(message);
+  }, []);
 
   const {
     setupAudio,
@@ -73,33 +62,33 @@ export default function Home() {
     getRecordingBlob,
   } = useAudioProcessor(onAudioReceivedFromMic);
 
-  const onDownloadRecording = useCallback(() => {
-    const blob = getRecordingBlob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `hibiki-zero-${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.webm`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, [getRecordingBlob]);
+  const stopSession = useCallback(
+    (error?: string) => {
+      shouldConnectRef.current = false;
+      handshakeReceivedRef.current = false;
+      setShouldConnect(false);
+      setHandshakeReceived(false);
+      shutdownAudio();
+      if (error) setErrors((prev) => [...prev, error]);
+    },
+    [shutdownAudio],
+  );
 
-  useEffect(() => {
-    if (lastMessage === null) return;
-    // We need async for decodeFromBlob
-    const handleMessage = async () => {
-      if (!(lastMessage.data instanceof Blob)) {
-        console.error("Expected Blob data, but received:", lastMessage.data);
+  const handleMessage = useCallback(
+    async (data: unknown) => {
+      if (!(data instanceof Blob)) {
+        console.error("Expected Blob data, but received:", data);
         return;
       }
-      const lastMessageBytes = new Uint8Array(
-        await lastMessage.data.arrayBuffer(),
-      );
-      const kind = lastMessageBytes[0];
-      const dataBytes = lastMessageBytes.slice(1);
+      const messageBytes = new Uint8Array(await data.arrayBuffer());
+      const kind = messageBytes[0];
+      const dataBytes = messageBytes.slice(1);
 
-      if (kind === 2) {
+      if (kind === 0) {
+        // Handshake
+        handshakeReceivedRef.current = true;
+        setHandshakeReceived(true);
+      } else if (kind === 2) {
         // Text data
         const textDecoder = new TextDecoder();
         const text = textDecoder.decode(dataBytes);
@@ -120,9 +109,61 @@ export default function Home() {
         });
         setStepsSinceLastWord((prev) => prev + 1);
       }
-    };
-    handleMessage();
-  }, [audioProcessor, lastMessage]);
+    },
+    [audioProcessor],
+  );
+
+  const { sendMessage, readyState } = useWebSocket(
+    webSocketUrl,
+    {
+      onMessage: (event) => {
+        messageQueueRef.current = messageQueueRef.current
+          .then(() => handleMessage(event.data))
+          .catch((e) => console.error("Failed to handle message:", e));
+      },
+      onError: (event) => {
+        console.error("WebSocket error:", event);
+        if (!shouldConnectRef.current) return;
+        stopSession(
+          `Could not connect to the translation server at ${webSocketUrl}`,
+        );
+      },
+      onClose: () => {
+        if (!shouldConnectRef.current) return;
+        stopSession("The translation server closed the connection.");
+      },
+    },
+    shouldConnect,
+  );
+
+  useEffect(() => {
+    sendMessageRef.current = sendMessage;
+  }, [sendMessage]);
+
+  // const connectionStatus = {
+  //   [ReadyState.CONNECTING]: "Connecting",
+  //   [ReadyState.OPEN]: "Connection open",
+  //   [ReadyState.CLOSING]: "Connection closing",
+  //   [ReadyState.CLOSED]: "Connection closed",
+  //   [ReadyState.UNINSTANTIATED]: "Connection uninstantiated",
+  // }[readyState];
+
+  const onDownloadRecording = useCallback(() => {
+    const blob = getRecordingBlob();
+    const extension = blob.type.includes("mp4")
+      ? "mp4"
+      : blob.type.includes("ogg")
+        ? "ogg"
+        : "webm";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `hibiki-zero-${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.${extension}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [getRecordingBlob]);
 
   useEffect(() => {
     if (readyState === ReadyState.OPEN && shouldConnect) {
@@ -133,22 +174,40 @@ export default function Home() {
   }, [readyState, shouldConnect]);
 
   const onConnectButtonPress = async () => {
+    // Ignore presses while a session is still starting
+    if (startingRef.current) return;
     // If we're not connected yet
     if (!shouldConnect) {
+      startingRef.current = true;
       const mediaStream = await askMicrophoneAccess();
       // If we have access to the microphone:
-      if (mediaStream) {
-        setupAudio(mediaStream);
-        setShouldConnect(true);
+      const audioStarted =
+        mediaStream !== null &&
+        (await setupAudio(mediaStream).then(
+          () => true,
+          (e) => {
+            console.error("Could not start audio:", e);
+            mediaStream.getTracks().forEach((track) => track.stop());
+            setErrors((prev) => [...prev, "Could not start audio playback."]);
+            return false;
+          },
+        ));
+      startingRef.current = false;
+      if (audioStarted) {
         setWordsReceived([]);
         setStepsSinceLastWord(0);
+        shouldConnectRef.current = true;
+        setShouldConnect(true);
       }
     } else {
-      setShouldConnect(false);
-      shutdownAudio();
+      stopSession();
       setErrors([]); // Clear previous connection errors
     }
   };
+
+  const isTranslating = readyState === ReadyState.OPEN && handshakeReceived;
+  const isWaitingForServer =
+    readyState === ReadyState.OPEN && !handshakeReceived;
 
   const allErrors = errors.concat(
     microphoneAccess === "refused"
@@ -174,7 +233,7 @@ export default function Home() {
           </p>
           <p>
             Hibiki-Zero translates into English from French, Spanish, German,
-            and Portugese.
+            and Portuguese.
           </p>
           <p>Use headphones for a better experience.</p>
         </div>
@@ -192,7 +251,11 @@ export default function Home() {
             onClick={() => onConnectButtonPress()}
           >
             <span>
-              {readyState === ReadyState.OPEN ? "Translating" : "Translate"}
+              {isTranslating
+                ? "Translating"
+                : isWaitingForServer
+                  ? "Waiting"
+                  : "Translate"}
             </span>
             {readyState === ReadyState.OPEN && (
               <Circle
@@ -203,11 +266,7 @@ export default function Home() {
               />
             )}
             {!(readyState === ReadyState.OPEN) && (
-              <Circle
-                onClick={() => onConnectButtonPress()}
-                size={24}
-                color="var(--green)"
-              />
+              <Circle size={24} color="var(--green)" />
             )}
           </button>
           {!shouldConnect && !firstTime && hasRecording && (
@@ -220,6 +279,11 @@ export default function Home() {
             </button>
           )}
         </div>
+        {isWaitingForServer && (
+          <p>
+            The server is busy with another user, waiting for a free slot...
+          </p>
+        )}
         {allErrors.length > 0 && (
           <div>
             {allErrors.map((error, i) => (
@@ -236,7 +300,6 @@ export default function Home() {
                 You
               </span>
               <WaveformVisualizer
-                ref={userVisualizerRef}
                 width={800}
                 height={120}
                 waveformColor="#ffffff"
@@ -251,7 +314,6 @@ export default function Home() {
                 Hibiki-Zero
               </span>
               <WaveformVisualizer
-                ref={hibikiVisualizerRef}
                 width={800}
                 height={120}
                 waveformColor="#39F2AE"
@@ -266,7 +328,7 @@ export default function Home() {
         )}
         {!firstTime && (
           <div className="bg-gray my-4 p-4 min-h-40 w-full">
-            {readyState === ReadyState.OPEN && wordsReceived.length === 0 ? (
+            {isTranslating && wordsReceived.length === 0 ? (
               <span className="text-textgray">
                 Speak to see your words translated...
               </span>

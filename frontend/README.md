@@ -17,10 +17,15 @@ To run in dev mode, starting a development server that will auto-reload if you c
 ```bash
 pnpm dev
 ```
+The development server doesn't serve the translation API, so start the Python server
+(`uv run hibiki-zero serve`) and point the page at it:
+```bash
+NEXT_PUBLIC_SERVER_HOST=localhost:8998 pnpm dev
+```
 
 To get a static build that you can serve using a webserver:
 ```bash
 STATIC_EXPORT=1 pnpm next build
 ```
 
-For either of these, you can specify the host using `--host` and the port using `--port`.
+For `pnpm dev`, you can specify the host using `--hostname` and the port using `--port`.
