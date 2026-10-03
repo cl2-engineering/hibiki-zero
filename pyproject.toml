@@ -57,6 +57,9 @@ hibiki-zero = "hibiki_zero.run:cli_app"
 # System python distribution can have header files missing, so we use only the python
 # distributions provided by uv which have everything included.
 python-preference = "only-managed"
+# moshi pins torch<2.10, but those builds stop at sm_120 and warn on newer GPUs such as
+# the GB10 (sm_121). This override only applies to uv, not to pip installs.
+override-dependencies = ["torch>=2.10"]
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu130", marker = "sys_platform == 'linux'" }]
